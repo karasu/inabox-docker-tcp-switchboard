@@ -1,4 +1,12 @@
 #!/bin/sh
-echo "Run 'ssh -p 2222 inabox@localhost' to enter..."
-python inabox-switchboard.py
 
+IMAGE_OK=$(docker images|grep inabox|cut -f 1 -d ' ')
+
+if [ "$IMAGE_OK" == "inabox" ]; then
+    #echo "Run 'ssh -p 2222 inabox@localhost' to enter..."
+    wssh --port=4001 --policy=reject &!
+    python inabox-switchboard.py
+    killall wssh
+else
+    echo "You must create docker image first. Run docker-compose in container folder"
+fi
