@@ -1,4 +1,4 @@
-FROM ubuntu:16.04
+FROM debian:latest
 
 #--------- Install usefull tools -----------
 RUN apt-get update && apt-get install -y \
@@ -13,9 +13,9 @@ RUN apt-get update && apt-get install -y \
 #--------- SETUP System -----------
 
 # add user and sudo
-RUN useradd -ms /bin/bash -g sudo sshuser
-# username= sshuser, password= password
-RUN echo 'sshuser:password' | chpasswd
+RUN useradd -ms /bin/bash -g sudo inabox
+# username= inabox, password= inabox
+RUN echo 'inabox:inabox' | chpasswd
 RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
 # Config SSH
@@ -28,8 +28,8 @@ RUN mkdir /var/run/sshd
 
 #--------- SETUP USER -----------
 
-USER sshuser
-WORKDIR /home/sshuser/
+USER inabox
+WORKDIR /home/inabox/
 
 #------------- ROOT -------------
 

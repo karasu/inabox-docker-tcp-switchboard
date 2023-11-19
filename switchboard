@@ -1,0 +1,4 @@
+#!/bin/sh
+echo "Run 'ssh -p 2222 inabox@localhost' to enter..."
+python inabox-switchboard.py
+

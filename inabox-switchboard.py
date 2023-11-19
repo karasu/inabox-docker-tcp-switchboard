@@ -3,6 +3,7 @@
 from twisted.protocols.portforward import *
 from twisted.internet import reactor
 
+import twisted
 import time, socket
 import configparser, glob
 import random, string
@@ -374,9 +375,11 @@ if __name__ == "__main__":
 
     print(portsAndNames)
     
-    for (name, outerport) in portsAndNames.items():
-        logger.debug("Listening on port {}".format(outerport))
-        reactor.listenTCP(outerport, DockerProxyFactory(name), interface=sys.argv[2] if len(sys.argv) > 2 else '')
-    reactor.run()
-
+    try:
+        for (name, outerport) in portsAndNames.items():
+            logger.debug("Listening on port {}".format(outerport))
+            reactor.listenTCP(outerport, DockerProxyFactory(name), interface=sys.argv[2] if len(sys.argv) > 2 else '')
+        reactor.run()
+    except twisted.internet.error.CannotListenError as err:
+        print(err)
 
