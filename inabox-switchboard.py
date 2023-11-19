@@ -13,7 +13,7 @@ import copy
 
 import logging
 import logging.handlers
-logger = logging.getLogger("docker-tcp-switchboard")
+logger = logging.getLogger("inabox-switchboard")
 
 # this is a global object that keeps track of the free ports
 # when requested, it allocated a new docker instance and returns it
@@ -370,8 +370,10 @@ if __name__ == "__main__":
     import sys
 
     globalDockerPorts = DockerPorts()
-    portsAndNames = globalDockerPorts.readConfig(sys.argv[1] if len(sys.argv) > 1 else '/etc/docker-tcp-switchboard.conf')
+    portsAndNames = globalDockerPorts.readConfig(sys.argv[1] if len(sys.argv) > 1 else 'inabox-switchboard.conf')
 
+    print(portsAndNames)
+    
     for (name, outerport) in portsAndNames.items():
         logger.debug("Listening on port {}".format(outerport))
         reactor.listenTCP(outerport, DockerProxyFactory(name), interface=sys.argv[2] if len(sys.argv) > 2 else '')
