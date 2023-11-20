@@ -16,6 +16,31 @@ import logging
 import logging.handlers
 logger = logging.getLogger("inabox-switchboard")
 
+class CustomFormatter(logging.Formatter):
+    grey = "\x1b[38;20m"
+    yellow = "\x1b[33;20m"
+    blue = "\x1b[34;20m"
+    green = "\x1b[32;20m"
+    red = "\x1b[31;20m"
+    bold_red = "\x1b[31;1m"
+    reset = "\x1b[0m"
+    #format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)"
+    format = "[%(levelname)s %(asctime)s %(funcName)s:%(lineno)d] "
+    message = "%(message)s"
+
+    FORMATS = {
+        logging.DEBUG: blue + format + reset + message,
+        logging.INFO: grey + format + reset + message,
+        logging.WARNING: yellow + format + reset + message,
+        logging.ERROR: red + format + reset + message,
+        logging.CRITICAL: bold_red + format + reset + message
+    }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(log_fmt)
+        return formatter.format(record)
+
 # this is a global object that keeps track of the free ports
 # when requested, it allocated a new docker instance and returns it
 
@@ -104,9 +129,13 @@ class DockerPorts():
                 handler = logging.handlers.TimedRotatingFileHandler(config["global"]["logfile"], when=config["global"]["rotatelogfileat"])
             else:
                 handler = logging.FileHandler(config["global"]["logfile"])
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            handler.setFormatter(formatter)
+            handler.setFormatter(CustomFormatter())
             logger.addHandler(handler)
+
+        # Log to the screen, too
+        handler = logging.StreamHandler()
+        handler.setFormatter(CustomFormatter())
+        logger.addHandler(handler)
 
         # set log level
         if "global" in config.sections() and "loglevel" in config["global"]:
@@ -126,7 +155,9 @@ class DockerPorts():
 
         for profilename in self._getProfilesList(config):
             conf = self._readProfileConfig(config, profilename)
-            logger.debug("Read config for profile {} as:\n {}".format(profilename, pprint.pformat(conf)))
+            #logger.debug("Read config for profile {} as:\n {}".format(profilename, pprint.pformat(conf)))
+            logger.debug("Read config for profile {}".format(profilename))
+
             self.registerProxy(profilename, conf)
 
         return dict([(name, self.imageParams[name]["outerport"]) for name in self.imageParams.keys()])
@@ -366,14 +397,11 @@ class DockerProxyFactory(ProxyFactory):
     def __init__(self, profilename):
         self.profilename = profilename
 
-
-if __name__ == "__main__":
+def main():
     import sys
 
     globalDockerPorts = DockerPorts()
     portsAndNames = globalDockerPorts.readConfig(sys.argv[1] if len(sys.argv) > 1 else 'inabox-switchboard.conf')
-
-    print(portsAndNames)
     
     try:
         for (name, outerport) in portsAndNames.items():
@@ -383,3 +411,5 @@ if __name__ == "__main__":
     except twisted.internet.error.CannotListenError as err:
         print(err)
 
+if __name__ == "__main__":
+    main()
