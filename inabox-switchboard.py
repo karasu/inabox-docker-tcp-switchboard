@@ -400,7 +400,7 @@ class DockerProxyFactory(ProxyFactory):
 def main():
     import sys
 
-    globalDockerPorts = DockerPorts()
+    global globalDockerPorts
     portsAndNames = globalDockerPorts.readConfig(sys.argv[1] if len(sys.argv) > 1 else 'inabox-switchboard.conf')
     
     try:
@@ -412,4 +412,5 @@ def main():
         print(err)
 
 if __name__ == "__main__":
+    globalDockerPorts = DockerPorts()
     main()

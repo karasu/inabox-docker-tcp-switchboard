@@ -3,5 +3,5 @@ version: '2'
 services:
   man:
     build: .
-    image: inabox:latest
+    image: inabox2:latest
 

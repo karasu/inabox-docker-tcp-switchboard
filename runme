@@ -1,0 +1,13 @@
+#!/bin/sh
+
+WEBSSH=$(pacman -Qq | grep webssh)
+
+if [ "$WEBSSH" == "" ]; then
+    echo "Remember to install python-wssh!"
+    exit
+fi
+
+wssh --port=4001 --policy=reject --debug &!
+echo "webssh running in http://localhost:4001"
+python inabox-switchboard.py
+killall wssh
