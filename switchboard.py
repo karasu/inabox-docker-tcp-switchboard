@@ -4,6 +4,7 @@ from twisted.protocols.portforward import *
 from twisted.internet import reactor
 
 import twisted
+import sys
 import time, socket
 import configparser, glob
 import random, string
@@ -398,8 +399,6 @@ class DockerProxyFactory(ProxyFactory):
         self.profilename = profilename
 
 def main():
-    import sys
-
     global globalDockerPorts
     portsAndNames = globalDockerPorts.readConfig(sys.argv[1] if len(sys.argv) > 1 else 'inabox-switchboard.conf')
     
