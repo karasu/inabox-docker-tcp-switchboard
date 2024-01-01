@@ -11,6 +11,7 @@ import pprint
 import json
 import docker
 import copy
+import sys
 
 import logging
 import logging.handlers
@@ -398,10 +399,8 @@ class DockerProxyFactory(ProxyFactory):
         self.profilename = profilename
 
 def main():
-    import sys
-
     global globalDockerPorts
-    portsAndNames = globalDockerPorts.readConfig(sys.argv[1] if len(sys.argv) > 1 else 'inabox-switchboard.conf')
+    portsAndNames = globalDockerPorts.readConfig(sys.argv[1] if len(sys.argv) > 1 else 'switchboard.conf')
     
     try:
         for (name, outerport) in portsAndNames.items():

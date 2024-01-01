@@ -9,5 +9,5 @@ fi
 
 wssh --port=4001 --policy=reject --debug &!
 echo "webssh running in http://localhost:4001"
-python inabox-switchboard.py
+python switchboard.py
 killall wssh
