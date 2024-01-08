@@ -3,5 +3,5 @@ version: '2'
 services:
   man:
     build: .
-    image: debian_inabox:latest
+    image: inabox_debian:latest
 

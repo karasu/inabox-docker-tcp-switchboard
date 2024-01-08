@@ -3,5 +3,5 @@ version: '2'
 services:
   man:
     build: .
-    image: ubuntu_inabox:latest
+    image: inabox_ubuntu:latest
 
