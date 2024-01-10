@@ -1,0 +1,13 @@
+#!/bin/sh
+
+cd images
+
+cd inabox_debian
+docker-compose build
+
+cd ../inabox_ubuntu
+docker-compose build
+
+cd ..
+
+
