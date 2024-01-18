@@ -1,94 +1,115 @@
-#!/usr/bin/env python3
+""" switchboard.py
+    Launches a fresh docker container per SSH connection  """
 
-from twisted.protocols.portforward import *
-from twisted.internet import reactor
-
-import twisted
 import sys
-import time, socket
-import configparser, glob
-import random, string
+import time
+import socket
+import configparser
+import glob
+import random
+import string
 import pprint
 import json
-import docker
 import copy
-import sys
-
 import logging
 import logging.handlers
+
+from collections import abc
+
+import twisted
+import docker
+
+from twisted.protocols.portforward import ProxyFactory, ProxyServer, ProxyClient, ProxyClientFactory
+#from twisted.protocols.portforward import LoggingProxyClient, LoggingProxyClientFactory
+from twisted.internet import reactor
+
 logger = logging.getLogger("switchboard")
 
 class CustomFormatter(logging.Formatter):
-    grey = "\x1b[38;20m"
-    yellow = "\x1b[33;20m"
-    blue = "\x1b[34;20m"
-    green = "\x1b[32;20m"
-    red = "\x1b[31;20m"
-    bold_red = "\x1b[31;1m"
-    reset = "\x1b[0m"
-    #format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)"
-    format = "[%(levelname)s %(asctime)s %(funcName)s:%(lineno)d] "
-    message = "%(message)s"
+    """ Class formatter for logging """
+    _grey = "\x1b[38;20m"
+    _yellow = "\x1b[33;20m"
+    _blue = "\x1b[34;20m"
+    _green = "\x1b[32;20m"
+    _red = "\x1b[31;20m"
+    _bold_red = "\x1b[31;1m"
+    _reset = "\x1b[0m"
+    _format = "[%(levelname)s %(asctime)s %(funcName)s:%(lineno)d] "
+    _message = "%(message)s"
 
     FORMATS = {
-        logging.DEBUG: blue + format + reset + message,
-        logging.INFO: grey + format + reset + message,
-        logging.WARNING: yellow + format + reset + message,
-        logging.ERROR: red + format + reset + message,
-        logging.CRITICAL: bold_red + format + reset + message
+        logging.DEBUG: _blue + _format + _reset + _message,
+        logging.INFO: _grey + _format + _reset + _message,
+        logging.WARNING: _yellow + _format + _reset + _message,
+        logging.ERROR: _red + _format + _reset + _message,
+        logging.CRITICAL: _bold_red + _format + _reset + _message
     }
 
     def format(self, record):
+        """ returns logging desired format """
         log_fmt = self.FORMATS.get(record.levelno)
         formatter = logging.Formatter(log_fmt)
         return formatter.format(record)
 
-# this is a global object that keeps track of the free ports
-# when requested, it allocated a new docker instance and returns it
 
 class DockerPorts():
+    ''' this is a global object that keeps track of the free ports
+    when requested, it allocated a new docker instance and returns it '''
+
     CONFIG_PROFILEPREFIX = "profile:"
     CONFIG_DOCKEROPTIONSPREFIX = "dockeroptions:"
 
     def __init__(self):
-        self.instancesByName = dict()
-        self.imageParams = dict()
+        self.instances_by_name = {}
+        self.image_params = {}
 
-    def _getProfilesList(self, config):
+    def _get_profiles_list(self, config):
         out = []
         for n in config.sections():
             if n.startswith(self.CONFIG_PROFILEPREFIX):
                 out += [n[len(self.CONFIG_PROFILEPREFIX):]]
         return out
 
-    def _readProfileConfig(self, config, profilename):
-        fullprofilename = "{}{}".format(self.CONFIG_PROFILEPREFIX, profilename)
-        innerport = self._parseInt(config[fullprofilename]["innerport"])
-        checkupport = self._parseInt(config[fullprofilename]["checkupport"]) if "checkupport" in config[fullprofilename] else innerport
+    def _read_profile_config(self, config, profilename):
+        fullprofilename = f"{self.CONFIG_PROFILEPREFIX}{profilename}"
+        innerport = self._parse_int(config[fullprofilename]["innerport"])
+        checkupport = innerport
+        limit = 0
+        reuse = False
+
+        if "checkupport" in config[fullprofilename]:
+            checkupport = self._parse_int(config[fullprofilename]["checkupport"])
+        if "limit" in config[fullprofilename]:
+            limit = self._parse_int(config[fullprofilename]["limit"])
+        if "reuse" in config[fullprofilename]:
+            reuse = self._parse_truthy(config[fullprofilename]["reuse"])
+
         return {
             "outerport": int(config[fullprofilename]["outerport"]),
             "innerport": innerport,
             "containername": config[fullprofilename]["container"],
             "checkupport": checkupport,
-            "limit": self._parseInt(config[fullprofilename]["limit"]) if "limit" in config[fullprofilename] else 0,
-            "reuse": self._parseTruthy(config[fullprofilename]["reuse"]) if "reuse" in config[fullprofilename] else False,
-            "dockeroptions": self._getDockerOptions(config, profilename, innerport, checkupport)
+            "limit": limit,
+            "reuse": reuse,
+            "dockeroptions": self._get_docker_options(
+                config, profilename, innerport, checkupport)
         }
 
-    def _addDockerOptionsFromConfigSection(self, config, sectionname, base={}):
-        import collections
+    def _add_docker_options_from_config_section(self, config, sectionname, base):
+        """ read options from config file """
         def update(d, u):
             for k, v in u.items():
-                if isinstance(v, collections.Mapping):
+                if isinstance(v, abc.Mapping):
                     r = update(d.get(k, {}), v)
                     d[k] = r
                 else:
                     d[k] = u[k]
             return d
 
-        # we may need to read json values
         def guessvalue(v):
-            if v in ["True", "False"] or all(c in string.digits for c in v) or v.startswith("[") or v.startswith("{"):
+            """ we may need to read json values """
+            if v in ["True", "False"] or all(c in string.digits for c in v) or \
+                v.startswith("[") or v.startswith("{"):
                 return json.loads(v)
             return v
 
@@ -100,13 +121,16 @@ class DockerPorts():
             for (k,v) in newvals.items():
                 fixedvals[k] = guessvalue(v)
             base = update(base, fixedvals)
-            
-        return base # FIXME
 
-    def _getDockerOptions(self, config, profilename, innerport, checkupport):
+        return base
+
+    def _get_docker_options(self, config, profilename, innerport, checkupport):
+        """ Get docker options form config """
         out = {}
-        out = self._addDockerOptionsFromConfigSection(config, "dockeroptions", {})
-        out = self._addDockerOptionsFromConfigSection(config, "{}{}".format(self.CONFIG_DOCKEROPTIONSPREFIX, profilename), out)
+        out = self._add_docker_options_from_config_section(
+            config, "dockeroptions", {})
+        out = self._add_docker_options_from_config_section(
+            config, f"{self.CONFIG_DOCKEROPTIONSPREFIX}{profilename}", out)
 
         out["detach"] = True
         if "ports" not in out:
@@ -119,16 +143,18 @@ class DockerPorts():
         #out["auto_remove"] = True
         return out
 
-    def readConfig(self, fn):
-        # read the configfile.
+    def read_config(self, fn):
+        """ read the configfile. """
         config = configparser.ConfigParser()
-        logger.debug("Reading configfile from {}".format(fn))
+        logger.debug("Reading configfile from %s", fn)
         config.read(fn)
 
         # set log file
         if "global" in config.sections() and "logfile" in config["global"]:
             if "global" in config.sections() and "rotatelogfileat" in config["global"]:
-                handler = logging.handlers.TimedRotatingFileHandler(config["global"]["logfile"], when=config["global"]["rotatelogfileat"])
+                handler = logging.handlers.TimedRotatingFileHandler(
+                    config["global"]["logfile"],
+                    when=config["global"]["rotatelogfileat"])
             else:
                 handler = logging.FileHandler(config["global"]["logfile"])
             handler.setFormatter(CustomFormatter())
@@ -147,249 +173,299 @@ class DockerPorts():
         # if there is a configdir directory, reread everything
         if "global" in config.sections() and "splitconfigfiles" in config["global"]:
             fnlist = [fn] + [f for f in glob.glob(config["global"]["splitconfigfiles"])]
-            logger.debug("Detected configdir directive. Reading configfiles from {}".format(fnlist))
+            logger.debug("Detected configdir directive. Reading configfiles from %s", fnlist)
             config = configparser.ConfigParser()
             config.read(fnlist)
 
-        if len(self._getProfilesList(config)) == 0:
+        if len(self._get_profiles_list(config)) == 0:
             logger.error("invalid configfile. No docker images")
             sys.exit(1)
 
-        for profilename in self._getProfilesList(config):
-            conf = self._readProfileConfig(config, profilename)
-            #logger.debug("Read config for profile {} as:\n {}".format(profilename, pprint.pformat(conf)))
-            logger.debug("Read config for profile {}".format(profilename))
+        for profilename in self._get_profiles_list(config):
+            conf = self._read_profile_config(config, profilename)
+            logger.debug("Read config for profile %s", profilename)
 
-            self.registerProxy(profilename, conf)
+            self.register_proxy(profilename, conf)
 
-        return dict([(name, self.imageParams[name]["outerport"]) for name in self.imageParams.keys()])
+        #dict([(name, self.image_params[name]["outerport"]) for name in self.image_params.keys()])
+        params = {}
+        for key, value in self.image_params.items():
+            params[key] = value["outerport"]
+        return params
 
-    def _parseInt(self, x):
+    def _parse_int(self, x):
+        """ converts to integer """
         return int(x)
 
-    def _parseTruthy(self, x):
+    def _parse_truthy(self, x):
+        """ converts to boolean """
         if x.lower() in ["0", "false", "no"]:
             return False
         if x.lower() in ["1", "true", "yes"]:
             return True
 
-        raise "Unknown truthy value {}".format(x)
+        raise f"Unknown truthy value {x}"
 
-    def registerProxy(self, profilename, conf):
-        self.imageParams[profilename] = copy.deepcopy(conf)
+    def register_proxy(self, profilename, conf):
+        """ store copy of config for this profile """
+        self.image_params[profilename] = copy.deepcopy(conf)
 
     def create(self, profilename):
-        containername = self.imageParams[profilename]["containername"]
-        dockeroptions = self.imageParams[profilename]["dockeroptions"]
-        imagelimit = self.imageParams[profilename]["limit"]
-        reuse = self.imageParams[profilename]["reuse"]
-        innerport = self.imageParams[profilename]["innerport"]
-        checkupport = self.imageParams[profilename]["checkupport"]
+        """ create docker instance """
+        containername = self.image_params[profilename]["containername"]
+        dockeroptions = self.image_params[profilename]["dockeroptions"]
+        imagelimit = self.image_params[profilename]["limit"]
+        reuse = self.image_params[profilename]["reuse"]
+        innerport = self.image_params[profilename]["innerport"]
+        checkupport = self.image_params[profilename]["checkupport"]
 
         icount = 0
-        if profilename in self.instancesByName:
-            icount = len(self.instancesByName[profilename])
+        if profilename in self.instances_by_name:
+            icount = len(self.instances_by_name[profilename])
 
         if imagelimit > 0 and icount >= imagelimit:
-            logger.warn("Reached max count of {} (currently {}) for image {}".format(imagelimit, icount, profilename))
+            logger.warning(
+                "Reached max count of %d (currently %d) for image %s",
+                imagelimit, icount, profilename)
             return None
 
         instance = None
 
         if reuse and icount > 0:
-            logger.debug("Reusing existing instance for image {}".format(profilename))
-            instance = self.instancesByName[profilename][0]
+            logger.debug("Reusing existing instance for image %s", profilename)
+            instance = self.instances_by_name[profilename][0]
         else:
-            instance = DockerInstance(profilename, containername, innerport, checkupport, dockeroptions)
+            instance = DockerInstance(
+                profilename, containername, innerport, checkupport, dockeroptions)
             instance.start()
 
-        if profilename not in self.instancesByName:
-            self.instancesByName[profilename] = []
+        if profilename not in self.instances_by_name:
+            self.instances_by_name[profilename] = []
 
         # in case of reuse, the list will have duplicates
-        self.instancesByName[profilename] += [instance]
+        self.instances_by_name[profilename] += [instance]
 
         return instance
 
     def destroy(self, instance):
+        """ destroy docker instance """
         profilename = instance.getProfileName()
-        reuse = self.imageParams[profilename]["reuse"]
+        reuse = self.image_params[profilename]["reuse"]
 
         # in case of reuse, the list will have duplicates, but remove() does not care
-        self.instancesByName[profilename].remove(instance)
+        self.instances_by_name[profilename].remove(instance)
 
         # stop the instance if there is no reuse, or if this is the last instance for a reused image
-        if not reuse or len(self.instancesByName[profilename]) == 0:
+        if not reuse or len(self.instances_by_name[profilename]) == 0:
             instance.stop()
 
 
-# this class represents a single docker instance listening on a certain middleport.
-# The middleport is managed by the DockerPorts global object
-# After the docker container is started, we wait until the middleport becomes reachable
-# before returning
 class DockerInstance():
+    """ this class represents a single docker instance listening on a certain middleport.
+    The middleport is managed by the DockerPorts global object
+    After the docker container is started, we wait until the middleport becomes reachable
+    before returning """
+
     def __init__(self, profilename, containername, innerport, checkupport, dockeroptions):
-        self._profilename = profilename
-        self._containername = containername
-        self._dockeroptions = dockeroptions
-        self._innerport = innerport
-        self._checkupport = checkupport
+        self._profile_name = profilename
+        self._container_name = containername
+        self._docker_options = dockeroptions
+        self._inner_port = innerport
+        self._checkup_port = checkupport
         self._instance = None
 
-    def getDockerOptions(self):
-        return self._dockeroptions
+    def get_docker_options(self):
+        """ Return docker options """
+        return self._docker_options
 
-    def getContainerName(self):
-        return self._containername
+    def get_container_name(self):
+        """ return container's name """
+        return self._container_name
 
-    def getMappedPort(self, inp):
+    def get_mapped_port(self, inp):
+        """ return container mapped port """
         try:
-            return int(self._instance.attrs["NetworkSettings"]["Ports"]["{}/tcp".format(inp)][0]["HostPort"])
+            return int(
+                self._instance.attrs["NetworkSettings"]["Ports"][f"{inp}/tcp"][0]["HostPort"])
         except Exception as e:
-            logger.warn("Failed to get port information for port {} from {}: {}".format(inp, self.getInstanceID(), e))
+            logger.warning(
+                "Failed to get port information for port %d from %d: %s",
+                inp, self.get_instance_id(), e)
         return None
 
-    def getMiddlePort(self):
-        return self.getMappedPort(self._innerport)
+    def get_middle_port(self):
+        """ returns inner port """
+        return self.get_mapped_port(self._inner_port)
 
-    def getMiddleCheckupPort(self):
-        return self.getMappedPort(self._checkupport)
+    def get_middle_checkup_port(self):
+        """ gets checkup port """
+        return self.get_mapped_port(self._checkup_port)
 
-    def getProfileName(self):
-        return self._profilename
+    def get_profile_name(self):
+        """ get profile name """
+        return self._profile_name
 
-    def getInstanceID(self):
+    def get_instance_id(self):
+        """ get instance id """
         try:
             return self._instance.id
         except Exception as e:
-            logger.warn("Failed to get instanceid: {}".format(e))
+            logger.warning("Failed to get instanceid: %s", e)
         return "None"
 
     def start(self):
+        """ Start this instance """
+
         # get docker client
         client = docker.from_env()
 
         # start instance
         try:
-            logger.debug("Starting instance {} of container {} with dockeroptions {}".format(self.getProfileName(), self.getContainerName(), pprint.pformat(self.getDockerOptions())))
-            clientres = client.containers.run(self.getContainerName(), **self.getDockerOptions())
+            logger.debug("Starting instance %s of container %s with dockeroptions %s",
+                self.get_profile_name(),
+                self.get_container_name(),
+                pprint.pformat(self.get_docker_options()))
+            clientres = client.containers.run(
+                self.get_container_name(),
+                **self.get_docker_options())
             self._instance = client.containers.get(clientres.id)
-            logger.debug("Done starting instance {} of container {}".format(self.getProfileName(), self.getContainerName()))
+            logger.debug("Done starting instance %s of container %s",
+                self.get_profile_name(),
+                self.get_container_name())
         except Exception as e:
-            logger.debug("Failed to start instance {} of container {}: {}".format(self.getProfileName(), self.getContainerName(), e))
+            logger.debug("Failed to start instance %s of container %s: %s",
+                self.get_profile_name(),
+                self.get_container_name(), e)
             self.stop()
             return False
 
         # wait until container's checkupport is available
-        logger.debug("Started instance on middleport {} with ID {}".format(self.getMiddlePort(), self.getInstanceID()))
-        if self.__waitForOpenPort(self.getMiddleCheckupPort()):
-            logger.debug("Started instance on middleport {} with ID {} has open port {}".format(self.getMiddlePort(), self.getInstanceID(), self.getMiddleCheckupPort()))
+        logger.debug("Started instance on middleport %s with ID %s",
+            self.get_middle_port(), self.get_instance_id())
+        if self._wait_for_open_port(self.get_middle_checkup_port()):
+            logger.debug("Started instance on middleport %d with ID %s has open port %d",
+                self.get_middle_port(), self.get_instance_id(), self.get_middle_checkup_port())
             return True
-        else:
-            logger.debug("Started instance on middleport {} with ID {} has closed port {}".format(self.getMiddlePort(), self.getInstanceID(), self.getMiddleCheckupPort()))
-            self.stop()
-            return False
+
+        logger.debug("Started instance on middleport %d with ID %s has closed port %d",
+            self.get_middle_port(), self.get_instance_id(), self.get_middle_checkup_port())
+        self.stop()
+        return False
 
     def stop(self):
-        mp = self.getMiddlePort()
-        cid = self.getInstanceID()
-        logger.debug("Killing and removing {} (middleport {})".format(cid, mp))
+        """ stop docker instance """
+        mp = self.get_middle_port()
+        cid = self.get_instance_id()
+        logger.debug("Killing and removing %s (middleport %d)", cid, mp)
         try:
             self._instance.remove(force=True)
         except Exception as e:
-            logger.warn("Failed to remove instance for middleport {}, id {}".format(mp, cid))
+            logger.warning("Failed to remove instance for middleport %d, id %s: %s",
+                mp, cid, e)
             return False
         return True
 
-    def __isPortOpen(self, port, readtimeout=0.1):
+    def __is_port_open(self, port, readtimeout=0.1):
         s = socket.socket()
         ret = False
-        logger.debug("Checking whether port {} is open...".format(port))
-        if port == None:
+        logger.debug("Checking whether port %d is open...", port)
+        if port is None:
             time.sleep(readtimeout)
         else:
             try:
                 s.connect(("0.0.0.0", port))
-                # just connecting is not enough, we should try to read and get at least 1 byte back
-                # since the daemon in the container might not have started accepting connections yet, while docker-proxy does
+                # just connecting is not enough, we should try to read and get at least 1 byte
+                # back since the daemon in the container might not have started accepting
+                # connections yet, while docker-proxy does
                 s.settimeout(readtimeout)
                 data = s.recv(1)
                 ret = len(data) > 0
             except socket.error:
                 ret = False
 
-        logger.debug("result = ".format(ret))
+        logger.debug("result = %s", ret)
         s.close()
         return ret
 
-    def __waitForOpenPort(self, port, timeout=5, step=0.1):
+    def _wait_for_open_port(self, port, timeout=5, step=0.1):
+        """ waits until instance is running """
         started = time.time()
 
         while started + timeout >= time.time():
-            if self.__isPortOpen(port):
+            if self.__is_port_open(port):
                 return True
             time.sleep(step)
         return False
-        
+
+
 class LoggingProxyClient(ProxyClient):
+    """ Logging proxy client """
     def dataReceived(self, data):
         payloadlen = len(data)
         self.factory.server.upBytes += payloadlen
         self.peer.transport.write(data)
 
 class LoggingProxyClientFactory(ProxyClientFactory):
+    """ Logging proxy client factory """
     protocol = LoggingProxyClient
 
 class DockerProxyServer(ProxyServer):
+    """ Docker proxy server """
     clientProtocolFactory = LoggingProxyClientFactory
     reactor = None
 
     def __init__(self):
         super().__init__()
-        self.downBytes = 0
-        self.upBytes = 0
-        self.sessionID = "".join([random.choice(string.ascii_letters) for _ in range(16)])
-        self.sessionStart = time.time()
+        self.down_bytes = 0
+        self.up_bytes = 0
+        self.session_id = "".join([random.choice(string.ascii_letters) for _ in range(16)])
+        self.session_start = time.time()
+        self.docker_instance = None
 
     # This is a reimplementation, except that we want to specify host and port...
-    def connectionMade(self): 
-        # Don't read anything from the connecting client until we have
-        # somewhere to send it to.
+    def connectionMade(self):
+        """ Don't read anything from the connecting client until we have
+        somewhere to send it to. """
         self.transport.pauseProducing()
 
         client = self.clientProtocolFactory()
         client.setServer(self)
 
         if self.reactor is None:
-            from twisted.internet import reactor
             self.reactor = reactor
-        global globalDockerPorts
-        self.dockerinstance = globalDockerPorts.create(self.factory.profilename)
-        if self.dockerinstance == None:
-            self.transport.write(bytearray("Maximum connection-count reached. Try again later.\r\n", "utf-8"))
+        global g_docker_ports
+        self.docker_instance = g_docker_ports.create(self.factory.profilename)
+        if self.docker_instance is None:
+            self.transport.write(
+                bytearray("Maximum connection-count reached. Try again later.\r\n", "utf-8"))
             self.transport.loseConnection()
         else:
-            logger.info("[Session {}] Incoming connection for image {} from {} at {}".format(self.sessionID, self.dockerinstance.getProfileName(),
-                self.transport.getPeer(), self.sessionStart))
-            self.reactor.connectTCP("0.0.0.0", self.dockerinstance.getMiddlePort(), client)
+            logger.info("[Session %s] Incoming connection for image %s from %s at %s",
+                self.session_id,
+                self.docker_instance.get_profile_name(),
+                self.transport.getPeer(),
+                self.session_start)
+            self.reactor.connectTCP("0.0.0.0", self.docker_instance.get_middle_port(), client)
 
     def connectionLost(self, reason):
         profilename = "<none>"
-        if self.dockerinstance != None:
-            global globalDockerPorts
-            globalDockerPorts.destroy(self.dockerinstance)
-            profilename = self.dockerinstance.getProfileName()
-        self.dockerinstance = None
+        if self.docker_instance is not None:
+            global g_docker_ports
+            g_docker_ports.destroy(self.docker_instance)
+            profilename = self.docker_instance.get_profile_name()
+        self.docker_instance = None
         super().connectionLost(reason)
         timenow = time.time()
-        logger.info("[Session {}] server disconnected session for image {} from {} (start={}, end={}, duration={}, upBytes={}, downBytes={}, totalBytes={})".format(
-                self.sessionID, profilename, self.transport.getPeer(),
-                self.sessionStart, timenow, timenow-self.sessionStart,
-                self.upBytes, self.downBytes, self.upBytes + self.downBytes))
+        logger.info(
+            "[Session %s] server disconnected session for image %s from %s \
+                (start=%s, end=%s, duration=%s, upBytes=%d, downBytes=%d, totalBytes=%d)",
+                self.session_id, profilename, self.transport.getPeer(),
+                self.session_start, timenow, timenow-self.session_start,
+                self.up_bytes, self.down_bytes, self.up_bytes + self.down_bytes)
 
     def dataReceived(self, data):
         payloadlen = len(data)
-        self.downBytes += payloadlen
+        self.down_bytes += payloadlen
         self.peer.transport.write(data)
 
 
@@ -400,17 +476,23 @@ class DockerProxyFactory(ProxyFactory):
         self.profilename = profilename
 
 def main():
-    global globalDockerPorts
-    portsAndNames = globalDockerPorts.readConfig(sys.argv[1] if len(sys.argv) > 1 else 'switchboard.conf')
-    
+    """ main function. Program starts here """
+    global g_docker_ports
+
+    ports_and_names = g_docker_ports.read_config(
+        sys.argv[1] if len(sys.argv) > 1 else 'switchboard.conf')
+
     try:
-        for (name, outerport) in portsAndNames.items():
-            logger.debug("Listening on port {}".format(outerport))
-            reactor.listenTCP(outerport, DockerProxyFactory(name), interface=sys.argv[2] if len(sys.argv) > 2 else '')
+        for (name, outerport) in ports_and_names.items():
+            logger.debug("Listening on port %d", outerport)
+            reactor.listenTCP(
+                outerport,
+                DockerProxyFactory(name),
+                interface=sys.argv[2] if len(sys.argv) > 2 else '')
         reactor.run()
     except twisted.internet.error.CannotListenError as err:
         print(err)
 
 if __name__ == "__main__":
-    globalDockerPorts = DockerPorts()
+    g_docker_ports = DockerPorts()
     main()
