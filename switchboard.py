@@ -20,10 +20,9 @@ import twisted
 import docker
 
 from twisted.protocols.portforward import ProxyFactory, ProxyServer, ProxyClient, ProxyClientFactory
-#from twisted.protocols.portforward import LoggingProxyClient, LoggingProxyClientFactory
 from twisted.internet import reactor
 
-logger = logging.getLogger("switchboard")
+g_logger = logging.getLogger("switchboard")
 
 class CustomFormatter(logging.Formatter):
     """ Class formatter for logging """
@@ -146,7 +145,7 @@ class DockerPorts():
     def read_config(self, fn):
         """ read the configfile. """
         config = configparser.ConfigParser()
-        logger.debug("Reading configfile from %s", fn)
+        g_logger.debug("Reading configfile from %s", fn)
         config.read(fn)
 
         # set log file
@@ -158,36 +157,35 @@ class DockerPorts():
             else:
                 handler = logging.FileHandler(config["global"]["logfile"])
             handler.setFormatter(CustomFormatter())
-            logger.addHandler(handler)
+            g_logger.addHandler(handler)
 
         # Log to the screen, too
         handler = logging.StreamHandler()
         handler.setFormatter(CustomFormatter())
-        logger.addHandler(handler)
+        g_logger.addHandler(handler)
 
         # set log level
         if "global" in config.sections() and "loglevel" in config["global"]:
-            #global logger
-            logger.setLevel(logging.getLevelName(config["global"]["loglevel"]))
+            # global logger
+            g_logger.setLevel(logging.getLevelName(config["global"]["loglevel"]))
 
         # if there is a configdir directory, reread everything
         if "global" in config.sections() and "splitconfigfiles" in config["global"]:
             fnlist = [fn] + [f for f in glob.glob(config["global"]["splitconfigfiles"])]
-            logger.debug("Detected configdir directive. Reading configfiles from %s", fnlist)
+            g_logger.debug("Detected configdir directive. Reading configfiles from %s", fnlist)
             config = configparser.ConfigParser()
             config.read(fnlist)
 
         if len(self._get_profiles_list(config)) == 0:
-            logger.error("invalid configfile. No docker images")
+            g_logger.error("invalid configfile. No docker images")
             sys.exit(1)
 
         for profilename in self._get_profiles_list(config):
             conf = self._read_profile_config(config, profilename)
-            logger.debug("Read config for profile %s", profilename)
+            g_logger.debug("Read config for profile %s", profilename)
 
             self.register_proxy(profilename, conf)
 
-        #dict([(name, self.image_params[name]["outerport"]) for name in self.image_params.keys()])
         params = {}
         for key, value in self.image_params.items():
             params[key] = value["outerport"]
@@ -223,8 +221,8 @@ class DockerPorts():
         if profilename in self.instances_by_name:
             icount = len(self.instances_by_name[profilename])
 
-        if imagelimit > 0 and icount >= imagelimit:
-            logger.warning(
+        if icount >= imagelimit > 0:
+            g_logger.warning(
                 "Reached max count of %d (currently %d) for image %s",
                 imagelimit, icount, profilename)
             return None
@@ -232,7 +230,7 @@ class DockerPorts():
         instance = None
 
         if reuse and icount > 0:
-            logger.debug("Reusing existing instance for image %s", profilename)
+            g_logger.debug("Reusing existing instance for image %s", profilename)
             instance = self.instances_by_name[profilename][0]
         else:
             instance = DockerInstance(
@@ -249,7 +247,7 @@ class DockerPorts():
 
     def destroy(self, instance):
         """ destroy docker instance """
-        profilename = instance.getProfileName()
+        profilename = instance.get_profile_name()
         reuse = self.image_params[profilename]["reuse"]
 
         # in case of reuse, the list will have duplicates, but remove() does not care
@@ -267,20 +265,20 @@ class DockerInstance():
     before returning """
 
     def __init__(self, profilename, containername, innerport, checkupport, dockeroptions):
-        self._profile_name = profilename
-        self._container_name = containername
-        self._docker_options = dockeroptions
-        self._inner_port = innerport
-        self._checkup_port = checkupport
+        self._profilename = profilename
+        self._containername = containername
+        self._dockeroptions = dockeroptions
+        self._innerport = innerport
+        self._checkupport = checkupport
         self._instance = None
 
     def get_docker_options(self):
         """ Return docker options """
-        return self._docker_options
+        return self._dockeroptions
 
     def get_container_name(self):
         """ return container's name """
-        return self._container_name
+        return self._containername
 
     def get_mapped_port(self, inp):
         """ return container mapped port """
@@ -288,29 +286,29 @@ class DockerInstance():
             return int(
                 self._instance.attrs["NetworkSettings"]["Ports"][f"{inp}/tcp"][0]["HostPort"])
         except Exception as e:
-            logger.warning(
+            g_logger.warning(
                 "Failed to get port information for port %d from %d: %s",
                 inp, self.get_instance_id(), e)
         return None
 
     def get_middle_port(self):
         """ returns inner port """
-        return self.get_mapped_port(self._inner_port)
+        return self.get_mapped_port(self._innerport)
 
     def get_middle_checkup_port(self):
         """ gets checkup port """
-        return self.get_mapped_port(self._checkup_port)
+        return self.get_mapped_port(self._checkupport)
 
     def get_profile_name(self):
         """ get profile name """
-        return self._profile_name
+        return self._profilename
 
     def get_instance_id(self):
         """ get instance id """
         try:
             return self._instance.id
         except Exception as e:
-            logger.warning("Failed to get instanceid: %s", e)
+            g_logger.warning("Failed to get instance id: %s", e)
         return "None"
 
     def start(self):
@@ -321,33 +319,34 @@ class DockerInstance():
 
         # start instance
         try:
-            logger.debug("Starting instance %s of container %s with dockeroptions %s",
+            g_logger.debug("Starting instance %s of container %s with dockeroptions %s",
                 self.get_profile_name(),
                 self.get_container_name(),
                 pprint.pformat(self.get_docker_options()))
+
             clientres = client.containers.run(
-                self.get_container_name(),
-                **self.get_docker_options())
+                self.get_container_name(), **self.get_docker_options())
+
             self._instance = client.containers.get(clientres.id)
-            logger.debug("Done starting instance %s of container %s",
-                self.get_profile_name(),
-                self.get_container_name())
+
+            g_logger.debug("Done starting instance %s of container %s",
+                self.get_profile_name(), self.get_container_name())
         except Exception as e:
-            logger.debug("Failed to start instance %s of container %s: %s",
-                self.get_profile_name(),
-                self.get_container_name(), e)
+            g_logger.debug("Failed to start instance %s of container %s: %s",
+                self.get_profile_name(), self.get_container_name(), e)
             self.stop()
             return False
 
         # wait until container's checkupport is available
-        logger.debug("Started instance on middleport %s with ID %s",
+        g_logger.debug("Started instance on middleport %s with ID %s",
             self.get_middle_port(), self.get_instance_id())
+
         if self._wait_for_open_port(self.get_middle_checkup_port()):
-            logger.debug("Started instance on middleport %d with ID %s has open port %d",
+            g_logger.debug("Started instance on middleport %d with ID %s has open port %d",
                 self.get_middle_port(), self.get_instance_id(), self.get_middle_checkup_port())
             return True
 
-        logger.debug("Started instance on middleport %d with ID %s has closed port %d",
+        g_logger.debug("Started instance on middleport %d with ID %s has closed port %d",
             self.get_middle_port(), self.get_instance_id(), self.get_middle_checkup_port())
         self.stop()
         return False
@@ -356,19 +355,21 @@ class DockerInstance():
         """ stop docker instance """
         mp = self.get_middle_port()
         cid = self.get_instance_id()
-        logger.debug("Killing and removing %s (middleport %d)", cid, mp)
+        g_logger.debug("Killing and removing %s (middleport %d)", cid, mp)
+
         try:
             self._instance.remove(force=True)
         except Exception as e:
-            logger.warning("Failed to remove instance for middleport %d, id %s: %s",
+            g_logger.warning("Failed to remove instance for middleport %d, id %s: %s",
                 mp, cid, e)
             return False
         return True
 
-    def __is_port_open(self, port, readtimeout=0.1):
+    def _is_port_open(self, port, readtimeout=0.1):
         s = socket.socket()
         ret = False
-        logger.debug("Checking whether port %d is open...", port)
+        g_logger.debug("Checking whether port %d is open...", port)
+
         if port is None:
             time.sleep(readtimeout)
         else:
@@ -383,7 +384,7 @@ class DockerInstance():
             except socket.error:
                 ret = False
 
-        logger.debug("result = %s", ret)
+        g_logger.debug("result = %s", ret)
         s.close()
         return ret
 
@@ -392,7 +393,7 @@ class DockerInstance():
         started = time.time()
 
         while started + timeout >= time.time():
-            if self.__is_port_open(port):
+            if self._is_port_open(port):
                 return True
             time.sleep(step)
         return False
@@ -402,7 +403,7 @@ class LoggingProxyClient(ProxyClient):
     """ Logging proxy client """
     def dataReceived(self, data):
         payloadlen = len(data)
-        self.factory.server.upBytes += payloadlen
+        self.factory.server.up_bytes += payloadlen
         self.peer.transport.write(data)
 
 class LoggingProxyClientFactory(ProxyClientFactory):
@@ -422,10 +423,11 @@ class DockerProxyServer(ProxyServer):
         self.session_start = time.time()
         self.docker_instance = None
 
-    # This is a reimplementation, except that we want to specify host and port...
     def connectionMade(self):
-        """ Don't read anything from the connecting client until we have
-        somewhere to send it to. """
+        """ This is a reimplementation, except that we want to specify host and port... """
+
+        # Don't read anything from the connecting client until we have
+        # somewhere to send it to.
         self.transport.pauseProducing()
 
         client = self.clientProtocolFactory()
@@ -433,30 +435,32 @@ class DockerProxyServer(ProxyServer):
 
         if self.reactor is None:
             self.reactor = reactor
-        global g_docker_ports
+
         self.docker_instance = g_docker_ports.create(self.factory.profilename)
+
         if self.docker_instance is None:
             self.transport.write(
                 bytearray("Maximum connection-count reached. Try again later.\r\n", "utf-8"))
             self.transport.loseConnection()
         else:
-            logger.info("[Session %s] Incoming connection for image %s from %s at %s",
+            g_logger.info("[Session %s] Incoming connection for image %s from %s at %s",
                 self.session_id,
                 self.docker_instance.get_profile_name(),
                 self.transport.getPeer(),
                 self.session_start)
+
             self.reactor.connectTCP("0.0.0.0", self.docker_instance.get_middle_port(), client)
 
     def connectionLost(self, reason):
         profilename = "<none>"
         if self.docker_instance is not None:
-            global g_docker_ports
             g_docker_ports.destroy(self.docker_instance)
             profilename = self.docker_instance.get_profile_name()
+
         self.docker_instance = None
         super().connectionLost(reason)
         timenow = time.time()
-        logger.info(
+        g_logger.info(
             "[Session %s] server disconnected session for image %s from %s \
                 (start=%s, end=%s, duration=%s, upBytes=%d, downBytes=%d, totalBytes=%d)",
                 self.session_id, profilename, self.transport.getPeer(),
@@ -475,16 +479,16 @@ class DockerProxyFactory(ProxyFactory):
     def __init__(self, profilename):
         self.profilename = profilename
 
+
 def main():
     """ main function. Program starts here """
-    global g_docker_ports
 
     ports_and_names = g_docker_ports.read_config(
         sys.argv[1] if len(sys.argv) > 1 else 'switchboard.conf')
 
     try:
         for (name, outerport) in ports_and_names.items():
-            logger.debug("Listening on port %d", outerport)
+            g_logger.debug("Listening on port %d", outerport)
             reactor.listenTCP(
                 outerport,
                 DockerProxyFactory(name),
@@ -493,6 +497,7 @@ def main():
     except twisted.internet.error.CannotListenError as err:
         print(err)
 
+g_docker_ports = DockerPorts()
+
 if __name__ == "__main__":
-    g_docker_ports = DockerPorts()
     main()
