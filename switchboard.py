@@ -22,6 +22,9 @@ import docker
 from twisted.protocols.portforward import ProxyFactory, ProxyServer, ProxyClient, ProxyClientFactory
 from twisted.internet import reactor
 
+import pika
+import rabbit
+
 g_logger = logging.getLogger("switchboard")
 
 class CustomFormatter(logging.Formatter):
@@ -242,6 +245,14 @@ class DockerPorts():
 
         # in case of reuse, the list will have duplicates
         self.instances_by_name[profilename] += [instance]
+
+        # Send profile of recent created docker instance to rabbitmq
+        try:
+            rabbit.send(self.image_params[profilename])
+        except pika.exceptions.AMQPConnectionError:
+            g_logger.warning("Cannot connect to rabbitmq. Are you sure it is running?")
+        else:
+            g_logger.info("Profile sent to rabbitmq server")
 
         return instance
 
