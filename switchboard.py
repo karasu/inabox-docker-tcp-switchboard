@@ -246,7 +246,7 @@ class DockerPorts():
         # in case of reuse, the list will have duplicates
         self.instances_by_name[profilename] += [instance]
 
-        # Send profile of recent created docker instance to rabbitmq
+        # Send the information of the recent created docker instance to rabbitmq
         try:
             rabbit.send(instance.get_instance_info())
         except pika.exceptions.AMQPConnectionError:
@@ -254,7 +254,8 @@ class DockerPorts():
                 "Cannot connect to rabbitmq. Are you sure it is running?")
         else:
             g_logger.info(
-                "Profile sent to rabbitmq server")
+                "Docker instance [%s] info sent to rabbitmq server",
+                instance.get_instance_id())
 
         return instance
 
