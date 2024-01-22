@@ -5,8 +5,6 @@ import json
 import pika
 
 QUEUE = 'switchbox'
-EXCHANGE = 'switchbox'
-EXCHANGE_TYPE = 'direct'
 
 def connect():
     """ Connect to rabbitmq """
@@ -28,18 +26,11 @@ def send(profile):
 
     channel = connection.channel()
 
-    channel.exchange_declare(
-            exchange=EXCHANGE,
-            exchange_type=EXCHANGE_TYPE,
-            passive=False,
-            durable=True,
-            auto_delete=False)
-
     channel.queue_declare(queue=QUEUE)
 
     channel.basic_publish(
-        exchange=EXCHANGE,
-        routing_key='switchbox',
+        exchange='',
+        routing_key=QUEUE,
         body=json.dumps(profile))
 
     connection.close()
