@@ -248,11 +248,13 @@ class DockerPorts():
 
         # Send profile of recent created docker instance to rabbitmq
         try:
-            rabbit.send(self.image_params[profilename])
+            rabbit.send(instance.get_instance_info())
         except pika.exceptions.AMQPConnectionError:
-            g_logger.warning("Cannot connect to rabbitmq. Are you sure it is running?")
+            g_logger.warning(
+                "Cannot connect to rabbitmq. Are you sure it is running?")
         else:
-            g_logger.info("Profile sent to rabbitmq server")
+            g_logger.info(
+                "Profile sent to rabbitmq server")
 
         return instance
 
@@ -283,6 +285,19 @@ class DockerInstance():
         self._checkupport = checkupport
         self._instance = None
 
+    def get_instance_info(self):
+        """ Return all instance parameters """
+        return {
+            "profile_name": self._profilename,
+            "container_name": self._containername,
+            "docker_options": self._dockeroptions,
+            "inner_port": self._innerport,
+            "checkup_port": self._checkupport,
+            "middle_port": self.get_middle_port(),
+            "middle_checkup_port": self.get_middle_checkup_port(),
+            "instance_id": self.get_instance_id(),
+        }
+
     def get_docker_options(self):
         """ Return docker options """
         return self._dockeroptions
@@ -291,15 +306,15 @@ class DockerInstance():
         """ return container's name """
         return self._containername
 
-    def get_mapped_port(self, inp):
+    def get_mapped_port(self, in_port):
         """ return container mapped port """
         try:
             return int(
-                self._instance.attrs["NetworkSettings"]["Ports"][f"{inp}/tcp"][0]["HostPort"])
+                self._instance.attrs["NetworkSettings"]["Ports"][f"{in_port}/tcp"][0]["HostPort"])
         except Exception as e:
             g_logger.warning(
                 "Failed to get port information for port %d from %d: %s",
-                inp, self.get_instance_id(), e)
+                in_port, self.get_instance_id(), e)
         return None
 
     def get_middle_port(self):
