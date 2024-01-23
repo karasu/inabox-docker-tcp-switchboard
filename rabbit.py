@@ -4,7 +4,7 @@ import json
 
 import pika
 
-QUEUE = 'switchbox'
+QUEUE = 'switchboard'
 
 def connect():
     """ Connect to rabbitmq """
